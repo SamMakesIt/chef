@@ -1,0 +1,16 @@
+Onion
+beet
+bell_pepper
+cabbage
+carrot
+cucumber
+egg
+eggplant
+garlic
+green_pepper
+haft-cabbage
+half onion
+onion
+potato
+tomato
+zucchini
