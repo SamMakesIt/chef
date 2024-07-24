@@ -1,4 +1,4 @@
-# Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,23 +11,102 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# ==============================================================================
-"""label_image for tflite."""
-
+"""Main script to run the object detection routine."""
 import argparse
+import sys
 import time
+import gpiozero
 import cv2
-import numpy as np
-from PIL import Image
-import tensorflow as tf
+from tflite_support.task import core
+from tflite_support.task import processor
+from tflite_support.task import vision
+import utils
+import os
+import subprocess
+
+#define name of scripts to be run.
+
+script_detected_motor = 'detected_motor.py'
+script_not_detected_motor = 'not_detected_motor.py'
+
+#name of log file to be created
+
+LOG_FILE = 'logs.txt'
+LOG_FORMAT = '{} - Object detected: {}\n'
 
 
-def load_labels(filename):
-  with open(filename, 'r') as f:
-    return [line.strip() for line in f.readlines()]
+def detect_motor(program, exit_code=0):
+    # Start the script
+    process = subprocess.Popen(program)
+    # wait for the script to finish
+    process.wait()
+    # close this script
+    sys.exit(exit_code)
+    
+def not_detect_motor(program, exit_code=0):
+    # Start the script   
+    process = subprocess.Popen(program)
+    # wait for the script to finish
+    process.wait()
+    # close this script
+    sys.exit(exit_code)
+
+def detection_results(detection_result):
+    return detection_result.detections
+
+def detection_results_retry(cap, detector, detection_result, max_attempts=2, delay=1):
+    attempts = 0
+    while attempts != max_attempts:
+        print(f"Attempt {attempts + 1}")
+
+        try:
+            # Capture a new frame from the camera
+            success, image = cap.read()
+            if not success:
+                sys.exit(
+                    'ERROR: Unable to read from webcam. Please verify your webcam settings.'
+                )
+            
+            image = cv2.flip(image, 1)
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            input_tensor = vision.TensorImage.create_from_array(rgb_image)
+
+            # Perform object detection on the current frame
+            detection_result = detector.detect(input_tensor)
+            if detection_result.detections:
+                detect_motor(['python', script_detected_motor])
+                return
+            else:
+                print("Object not detected")
+            time.sleep(delay)
+        except Exception as e:
+            print(f"Error occurred: {e}")
+        attempts += 1
+         
+    
 
 
- # Start capturing video input from the camera
+    
+
+def run(model: str, camera_id: int, width: int, height: int, num_threads: int,
+        enable_edgetpu: bool) -> None:
+  """Continuously run inference on images acquired from the camera.
+
+  Args:
+    model: Name of the TFLite object detection model.
+    camera_id: The camera id to be passed to OpenCV.
+
+    width: The width of the frame captured from the camera.
+    height: The height of the frame captured from the camera.
+    num_threads: The number of CPU threads to run the model.
+    enable_edgetpu: True/False whether the model is a EdgeTPU model.
+  """
+
+  # Variables to calculate FPS
+  counter, fps = 0, 0
+  start_time = time.time()
+
+  # Start capturing video input from the camera
   cap = cv2.VideoCapture(camera_id)
   cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
   cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -49,6 +128,11 @@ def load_labels(filename):
       base_options=base_options, detection_options=detection_options)
   detector = vision.ObjectDetector.create_from_options(options)
 
+  # Check if log file exists, and create it if it does not
+  if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, 'w') as f:
+      f.write('Log file for object detection\n') 
+ 
  # Continuously capture images from the camera and run inference
   while cap.isOpened():
     success, image = cap.read()
@@ -72,102 +156,98 @@ def load_labels(filename):
     # Run object detection estimation using the model.
     detection_result = detector.detect(input_tensor)
 
-if __name__ == '__main__':
-  parser = argparse.ArgumentParser()
-  parser.add_argument(
-      '-i',
-      '--image',
-      default='/tmp/grace_hopper.bmp',
-      help='image to be classified')
-  parser.add_argument(
-      '-m',
-      '--model_file',
-      default='/home/sam/Desktop/chef/detect.tflite',
-      help='.tflite model to be executed')
-  parser.add_argument(
-      '-l',
-      '--label_file',
-      default='/home/sam/Desktop/chef/labelmap.txt',
-      help='name of file containing labels')
-  parser.add_argument(
-      '--input_mean',
-      default=127.5, type=float,
-      help='input_mean')
-  parser.add_argument(
-      '--input_std',
-      default=127.5, type=float,
-      help='input standard deviation')
-  parser.add_argument(
-      '--num_threads', default=None, type=int, help='number of threads')
-  parser.add_argument(
-      '-e', '--ext_delegate', help='external_delegate_library path')
-  parser.add_argument(
-      '-o',
-      '--ext_delegate_options',
-      help='external delegate options, \
-            format: "option1: value1; option2: value2"')
 
+    
+    
+    
+    
+    # Check if something was detected loop 5 times
+    for i in range(3):
+        detection_results_retry(cap, detector, detection_result=detection_result)
+        
+        
+    not_detect_motor(['python', script_not_detected_motor])
+        # Call my_function() five times
+    #detection_results_retry(detection_result=detection_result)
+
+    #if detection_result.detections:
+        
+    #    detect_motor(['python', 'detected_motor.py'])
+   # else:
+        
+        # Run the script for when nothing is detected
+      #  not_detect_motor(['python', 'not_detected_motor.py'])
+         
+        
+   
+    # Draw keypoints and edges on input image
+    image = utils.visualize(image, detection_result)
+    
+    # Calculate the FPS
+    if counter % fps_avg_frame_count == 0:
+      end_time = time.time()
+      fps = fps_avg_frame_count / (end_time - start_time)
+      start_time = time.time()
+
+    # Show the FPS
+    fps_text = 'FPS = {:.1f}'.format(fps)
+    text_location = (left_margin, row_size)
+    cv2.putText(image, fps_text, text_location, cv2.FONT_HERSHEY_PLAIN,
+                font_size, text_color, font_thickness)
+    
+    # Stop the program if the ESC key is pressed.
+    if cv2.waitKey(1) == 27:
+      break
+    cv2.imshow('object_detector', image)
+
+    
+
+  cap.release()
+  cv2.destroyAllWindows()
+  
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument(
+      '--model',
+      help='Path of the object detection model.',
+      required=False,
+      default='detect.tflite')
+  parser.add_argument(
+      '--cameraId', help='Id of camera.', required=False, type=int, default=0)
+  parser.add_argument(
+      '--frameWidth',
+      help='Width of frame to capture from camera.',
+      required=False,
+      type=int,
+      default=640)
+  parser.add_argument(
+      '--frameHeight',
+      help='Height of frame to capture from camera.',
+      required=False,
+      type=int,
+      default=480)
+  parser.add_argument(
+      '--numThreads',
+      help='Number of CPU threads to run the model.',
+      required=False,
+      type=int,
+      default=4)
+  parser.add_argument(
+      '--enableEdgeTPU',
+      help='Whether to run the model on EdgeTPU.',
+      action='store_true',
+      required=False,
+      default=False)
   args = parser.parse_args()
 
-  ext_delegate = None
-  ext_delegate_options = {}
+  run(args.model, int(args.cameraId), args.frameWidth, args.frameHeight,
+      int(args.numThreads), bool(args.enableEdgeTPU))
+  
 
-  # parse extenal delegate options
-  if args.ext_delegate_options is not None:
-    options = args.ext_delegate_options.split(';')
-    for o in options:
-      kv = o.split(':')
-      if (len(kv) == 2):
-        ext_delegate_options[kv[0].strip()] = kv[1].strip()
-      else:
-        raise RuntimeError('Error parsing delegate option: ' + o)
 
-  # load external delegate
-  if args.ext_delegate is not None:
-    print('Loading external delegate from {} with args: {}'.format(
-        args.ext_delegate, ext_delegate_options))
-    ext_delegate = [
-        tflite.load_delegate(args.ext_delegate, ext_delegate_options)
-    ]
+if __name__ == '__main__':
+  main()
 
-  interpreter = tf.lite.Interpreter(
-      model_path=args.model_file,
-      experimental_delegates=ext_delegate,
-      num_threads=args.num_threads)
-  interpreter.allocate_tensors()
-
-  input_details = interpreter.get_input_details()
-  output_details = interpreter.get_output_details()
-
-  # check the type of the input tensor
-  floating_model = input_details[0]['dtype'] == np.float32
-
-  # NxHxWxC, H:1, W:2
-  height = input_details[0]['shape'][1]
-  width = input_details[0]['shape'][2]
-  img = Image.open(args.image).resize((width, height))
-
-  # add N dim
-  input_data = np.expand_dims(img, axis=0)
-
-  if floating_model:
-    input_data = (np.float32(input_data) - args.input_mean) / args.input_std
-
-  interpreter.set_tensor(input_details[0]['index'], input_data)
-
-  start_time = time.time()
-  interpreter.invoke()
-  stop_time = time.time()
-
-  output_data = interpreter.get_tensor(output_details[0]['index'])
-  results = np.squeeze(output_data)
-
-  top_k = results.argsort()[-5:][::-1]
-  labels = load_labels(args.label_file)
-  for i in top_k:
-    if floating_model:
-      print('{:08.6f}: {}'.format(float(results[i]), labels[i]))
-    else:
-      print('{:08.6f}: {}'.format(float(results[i] / 255.0), labels[i]))
-
-  print('time: {:.3f}ms'.format((stop_time - start_time) * 1000))
